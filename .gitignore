@@ -1,0 +1,21 @@
+# Deno
+# The lock file is not committed to version control, because this is an application.
+# For libraries, it should be committed.
+# See: https://deno.land/manual@v1.37.1/basics/modules/integrity_checking_and_lock_files#should-i-commit-my-lock-file
+deno.lock
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+
+# Coverage
+coverage/

@@ -1,0 +1,9 @@
+{
+  "tasks": {
+    "dev": "deno run -A --env --watch discord.ts",
+    "start": "deno run -A --env discord.ts"
+  },
+  "compilerOptions": {
+    "lib": ["deno.window", "dom"]
+  }
+}
