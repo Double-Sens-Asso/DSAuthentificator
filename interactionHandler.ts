@@ -5,170 +5,153 @@ import {
 } from "npm:discord.js@14";
 
 import { CONFIG, EMAIL_REGEX } from "./config.ts";
-import { sendLog } from "./utils.ts";
-import { checkAndLinkUser, unlinkUserByEmail, findMemberByColumn } from "./nocodb.ts";
+import { sendLog, sendVerificationCode } from "./utils.ts";
+import { checkUserStatus, linkDiscordUser, unlinkUserByEmail, findMemberByColumn } from "./nocodb.ts";
+
+// Stockage temporaire : Map<DiscordID, {code, email, recordId}>
+const pendingVerifications = new Map<string, { code: string; email: string; recordId: number }>();
 
 export async function handleInteraction(interaction: Interaction<CacheType>, client: Client) {
   try {
-    /* --- GESTION DES COMMANDES SLASH (/...) --- */
+    /* --- COMMANDES SLASH --- */
     if (interaction.isChatInputCommand()) {
       const { commandName } = interaction;
 
-      // > /ping
-      if (commandName === "ping") {
-        await interaction.reply({ content: "🏓 Pong!", flags: MessageFlags.Ephemeral });
-      }
-
-      // > /verify
       if (commandName === "verify") {
-        const logoFile = new AttachmentBuilder("assets/logo.png");
-        
+        const logo = new AttachmentBuilder("assets/logo.png");
         const embed = new EmbedBuilder()
           .setTitle("✨ Bienvenue ! Finalisons ton inscription")
-          .setDescription(
-            "Tu es à une étape de rejoindre la communauté !\n" +
-            "Pour accéder aux **salons privés** et profiter de tes avantages, nous devons simplement lier ton compte Discord à ton dossier adhérent."
-          )
+          .setDescription("Nous allons vérifier ton adhésion.\nClique ci-dessous pour démarrer.")
           .setColor(0x5865F2)
           .setThumbnail("attachment://logo.png")
-          .addFields(
-            { 
-              name: "🚀 Comment faire ?", 
-              value: "Clique sur le bouton **« Lier mon compte »** ci-dessous et entre l'adresse email que tu as utilisée lors de ton adhésion.",
-              inline: false 
-            },
-            { 
-              name: "🔒 Données & Confidentialité (RGPD)", 
-              value: "Rassure-toi : ton email est **sécurisé**. Il sert uniquement à interroger notre base pour valider ta cotisation.",
-              inline: false 
-            }
-          )
-          .setFooter({ text: "Système sécurisé par DSAuthentificator", iconURL: client.user?.displayAvatarURL() });
+          .setFooter({ text: "Sécurisé par SMTP" });
 
         const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-          new ButtonBuilder()
-            .setCustomId("btn_verify_start")
-            .setLabel("Lier mon compte maintenant")
-            .setEmoji("🔗")
-            .setStyle(ButtonStyle.Primary)
+          new ButtonBuilder().setCustomId("btn_verify_start").setLabel("Lier mon compte").setStyle(ButtonStyle.Primary).setEmoji("📧")
         );
 
-        await interaction.reply({ 
-          embeds: [embed], 
-          components: [row], 
-          files: [logoFile], 
-          flags: MessageFlags.Ephemeral 
-        });
+        await interaction.reply({ embeds: [embed], components: [row], files: [logo], flags: MessageFlags.Ephemeral });
       }
 
-      // > /admin-unlink
+      // Commandes Admin
       if (commandName === "admin-unlink") {
-        const member = interaction.member as GuildMember;
-        if (!member.roles.cache.has(CONFIG.ADMIN_ROLE_ID!)) {
-          await interaction.reply({ content: "⛔ Permission refusée.", flags: MessageFlags.Ephemeral });
-          return;
-        }
-
+        if (!(interaction.member as GuildMember).roles.cache.has(CONFIG.ADMIN_ROLE_ID!)) return;
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-        const email = interaction.options.getString("email", true).trim();
-        const result = await unlinkUserByEmail(email);
-        
-        if (result.success) {
-          await interaction.editReply(`✅ **Succès :** ${result.message}`);
-          if (interaction.guild) await sendLog(interaction.guild, null, email, "🔧 ADMIN : Liaison supprimée", 0xFFA500);
-        } else {
-          await interaction.editReply(`❌ **Erreur :** ${result.message}`);
-        }
+        const res = await unlinkUserByEmail(interaction.options.getString("email", true));
+        await interaction.editReply(res.message);
       }
-
-      // > /admin-check
+      
       if (commandName === "admin-check") {
-        const member = interaction.member as GuildMember;
-        if (!member.roles.cache.has(CONFIG.ADMIN_ROLE_ID!)) {
-          await interaction.reply({ content: "⛔ Permission refusée.", flags: MessageFlags.Ephemeral });
-          return;
-        }
-
+        if (!(interaction.member as GuildMember).roles.cache.has(CONFIG.ADMIN_ROLE_ID!)) return;
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-        const email = interaction.options.getString("email", true).trim();
-        const data = await findMemberByColumn(CONFIG.COL_EMAIL, email);
-
-        if (!data) {
-          await interaction.editReply(`❌ Aucun dossier trouvé pour \`${email}\``);
-        } else {
-          const embed = new EmbedBuilder()
-            .setTitle(`🔍 Info Adhérent`)
-            .setColor(data.cotisationValide ? 0x00FF00 : 0xFF0000)
-            .addFields(
-              { name: "Email", value: data.email, inline: true },
-              { name: "Cotisation", value: data.cotisationValide ? "✅ Valide" : "❌ Expirée", inline: true },
-              { name: "ID NocoDB", value: String(data.recordId), inline: true },
-              { name: "Compte Discord", value: data.discordId ? `<@${data.discordId}>` : "Non lié", inline: false },
-            );
-          await interaction.editReply({ embeds: [embed] });
-        }
+        const data = await findMemberByColumn(CONFIG.COL_EMAIL, interaction.options.getString("email", true));
+        await interaction.editReply(data ? `✅ Trouvé: ID ${data.recordId} | Cotis: ${data.cotisationValide} | Discord: ${data.discordId}` : "❌ Inconnu");
       }
     }
 
-    /* --- GESTION DU BOUTON "Lier mon compte" --- */
+    /* --- BOUTON 1 : OUVRIR LE FORMULAIRE EMAIL --- */
     if (interaction.isButton() && interaction.customId === "btn_verify_start") {
-      const emailInput = new TextInputBuilder()
-        .setCustomId("input_email")
-        .setLabel("Ton adresse email")
-        .setPlaceholder("ex: jean.dupont@mail.com")
-        .setStyle(TextInputStyle.Short)
-        .setRequired(true);
-
-      const row = new ActionRowBuilder<TextInputBuilder>().addComponents(emailInput);
-
-      const modal = new ModalBuilder()
-        .setCustomId("modal_verify_submit")
-        .setTitle("Liaison Compte")
-        .addComponents(row);
+      const modal = new ModalBuilder().setCustomId("modal_email").setTitle("Identification");
+      modal.addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder().setCustomId("input_email").setLabel("Ton Email Adhérent").setStyle(TextInputStyle.Short).setRequired(true)
+      ));
 
       await interaction.showModal(modal);
     }
-    
-    /* --- GESTION DE LA SOUMISSION DU MODAL --- */
-    if (interaction.isModalSubmit() && interaction.customId === "modal_verify_submit") {
+
+    /* --- MODAL 1 RECU : VÉRIF STRICTE -> ENVOI MAIL --- */
+    if (interaction.isModalSubmit() && interaction.customId === "modal_email") {
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       
-      const email = interaction.fields.getTextInputValue("input_email");
-      
-      if (!EMAIL_REGEX.test(email)) { 
-        await interaction.editReply("❌ Le format de l'email est invalide."); 
-        return; 
+      // On nettoie l'entrée utilisateur
+      const email = interaction.fields.getTextInputValue("input_email").trim();
+
+      if (!EMAIL_REGEX.test(email)) {
+        await interaction.editReply("❌ Format d'email invalide.");
+        return;
       }
 
-      const result = await checkAndLinkUser(email, interaction.user.id);
+      // 1. VÉRIFICATIONS STRICTES (Comme avant)
+      const status = await checkUserStatus(email, interaction.user.id);
       
-      if (!result.success) { 
-        await interaction.editReply(`😕 ${result.message}`); 
-        return; 
+      // Si une erreur ou si déjà lié -> On arrête et on affiche le message
+      if (!status.valid || !status.member) {
+        await interaction.editReply(status.message);
+        return;
       }
 
-      const guild = interaction.guild;
-      if (guild) {
-        const role = guild.roles.cache.get(CONFIG.VERIFY_ROLE_ID!);
-        const member = await guild.members.fetch(interaction.user.id);
+      // 2. TOUT EST BON -> GÉNÉRATION DU CODE
+      const code = Math.floor(100000 + Math.random() * 900000).toString();
+      
+      // 3. ENVOI SMTP
+      const sent = await sendVerificationCode(email, code);
+      
+      if (!sent) {
+        await interaction.editReply("❌ Erreur technique lors de l'envoi de l'email. Contacte un admin.");
+        return;
+      }
+
+      // 4. STOCKAGE TEMPORAIRE
+      pendingVerifications.set(interaction.user.id, { code, email, recordId: status.member.recordId });
+
+      // 5. INVITE A ENTRER LE CODE
+      const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder().setCustomId("btn_enter_code").setLabel("J'ai reçu mon code").setStyle(ButtonStyle.Success).setEmoji("🔓")
+      );
+      
+      await interaction.editReply({ 
+        content: `✅ **Vérification initiale réussie !**\nUn code de sécurité vient d'être envoyé à \`${email}\`.\nRegarde tes spams, puis clique ci-dessous.`, 
+        components: [row] 
+      });
+    }
+
+    /* --- BOUTON 2 : OUVRIR LE FORMULAIRE CODE --- */
+    if (interaction.isButton() && interaction.customId === "btn_enter_code") {
+      if (!pendingVerifications.has(interaction.user.id)) {
+        await interaction.reply({ content: "⏳ Session expirée. Recommence depuis le début.", flags: MessageFlags.Ephemeral });
+        return;
+      }
+      const modal = new ModalBuilder().setCustomId("modal_code").setTitle("Code de Sécurité");
+      modal.addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder().setCustomId("input_code").setLabel("Code à 6 chiffres").setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(6)
+      ));
+
+      await interaction.showModal(modal);
+    }
+
+    /* --- MODAL 2 RECU : VÉRIF CODE -> LIAISON FINALE --- */
+    if (interaction.isModalSubmit() && interaction.customId === "modal_code") {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      
+      const codeInput = interaction.fields.getTextInputValue("input_code").trim();
+      const session = pendingVerifications.get(interaction.user.id);
+
+      // Vérif Code
+      if (!session || session.code !== codeInput) {
+        await interaction.editReply("❌ Code incorrect ou session expirée. Recommence.");
+        return;
+      }
+
+      // ECRITURE EN BASE (Seulement maintenant)
+      const success = await linkDiscordUser(session.recordId, interaction.user.id);
+      
+      if (success) {
+        // Ajout du Rôle
+        const role = interaction.guild?.roles.cache.get(CONFIG.VERIFY_ROLE_ID!);
+        if (role) await (interaction.member as GuildMember).roles.add(role);
         
-        if (role) {
-          if (!member.roles.cache.has(role.id)) {
-            await member.roles.add(role);
-            await interaction.editReply(`🎉 Compte lié à \`${email}\` ! Le rôle **${role.name}** t'a été ajouté.`);
-          } else {
-            await interaction.editReply(`✅ Compte lié à \`${email}\` (Tu possédais déjà le rôle).`);
-          }
-          await sendLog(guild, interaction.user.id, email, "✅ Succès (Utilisateur vérifié)");
-        } else {
-          await interaction.editReply("✅ Liaison réussie, mais **rôle introuvable** sur le serveur.");
-        }
+        // Log et Réponse
+        await sendLog(interaction.guild!, interaction.user.id, session.email, "✅ Succès (Vérifié par Code)");
+        await interaction.editReply(`🎉 **Félicitations !** Ton compte est maintenant lié à \`${session.email}\`.`);
+        
+        // Nettoyage
+        pendingVerifications.delete(interaction.user.id);
+      } else {
+        await interaction.editReply("❌ Erreur critique lors de l'enregistrement dans la base de données.");
       }
     }
-  } catch (e) { 
-    console.error("❌ Erreur Interaction:", e);
-    if (interaction.isRepliable() && !interaction.replied) {
-      await interaction.reply({ content: "Une erreur interne est survenue.", flags: MessageFlags.Ephemeral }).catch(() => {});
-    }
+
+  } catch (e) {
+    console.error("Global Interaction Error:", e);
   }
 }
