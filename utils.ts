@@ -1,3 +1,4 @@
+// deno-lint-ignore-file no-import-prefix no-unversioned-import
 import { EmbedBuilder, ChannelType, ForumChannel, TextChannel, Guild, Client } from "npm:discord.js@14";
 import nodemailer from "npm:nodemailer";
 import { CONFIG } from "./config.ts";
@@ -82,7 +83,7 @@ const transporter = nodemailer.createTransport({
 export async function sendVerificationCode(email: string, code: string): Promise<boolean> {
   try {
     await transporter.sendMail({
-      from: `"Bot Adhésion" <${CONFIG.SMTP_FROM}>`, // Adresse d'affichage (noreply@...)
+      from: `"Bot Adhésion" <${CONFIG.SMTP_FROM}>`, 
       to: email,
       subject: "🔐 Ton code de vérification Discord",
       text: `Voici ton code : ${code}. Valable 10 minutes.`,

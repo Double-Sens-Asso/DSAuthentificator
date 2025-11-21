@@ -1,3 +1,4 @@
+// deno-lint-ignore-file no-import-prefix no-unversioned-import
 import "jsr:@std/dotenv/load";
 
 export const CONFIG = {
@@ -22,9 +23,9 @@ export const CONFIG = {
   // SMTP (Configuration Brevo)
   SMTP_HOST: Deno.env.get("SMTP_HOST"),
   SMTP_PORT: Number(Deno.env.get("SMTP_PORT")),
-  SMTP_USER: Deno.env.get("SMTP_USER"), // Ton identifiant (94e79c...)
-  SMTP_PASS: Deno.env.get("SMTP_PASS"), // Ton mot de passe
-  SMTP_FROM: Deno.env.get("SMTP_FROM") ?? "noreply@asso-doublesens.fr", // L'adresse affichée aux gens
+  SMTP_USER: Deno.env.get("SMTP_USER"),
+  SMTP_PASS: Deno.env.get("SMTP_PASS"),
+  SMTP_FROM: Deno.env.get("SMTP_FROM"), 
 };
 
 // Vérification critique au démarrage
