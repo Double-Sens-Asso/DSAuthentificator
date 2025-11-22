@@ -1,9 +1,11 @@
 // deno-lint-ignore-file no-import-prefix
+
 import { Client, GatewayIntentBits, REST, Routes, Events } from "npm:discord.js@14";
 import { CONFIG } from "./config.ts";
 import { runDailyCheck } from "./utils.ts";
 import { handleInteraction } from "./interactionHandler.ts";
 import { testConnection } from "./nocodb.ts";
+import { commands } from "./commands.ts"; // <--- LIGNE À AJOUTER
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
