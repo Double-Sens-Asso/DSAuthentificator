@@ -1,8 +1,9 @@
 // deno-lint-ignore-file no-import-prefix no-unversioned-import
-import { EmbedBuilder, ChannelType, ForumChannel, TextChannel, Guild, Client } from "npm:discord.js@14";
+import { ChannelType, Client, EmbedBuilder, ForumChannel, Guild, GuildMember, TextChannel } from "npm:discord.js@14";
 import nodemailer from "npm:nodemailer";
 import { CONFIG } from "./config.ts";
-import { getAllLinkedUsers } from "./nocodb.ts";
+import { sleep } from "./helpers.ts";
+import { findMemberByColumn, getAllLinkedUsers } from "./nocodb.ts";
 import { clearPending, getPending, setPending } from "./pendingRemovals.ts";
 
 /* --- LOGS DISCORD --- */
@@ -33,6 +34,29 @@ export async function sendLog(guild: Guild, discordId: string | null, email: str
     }
   } catch (e) { 
     console.error("❌ Erreur log:", e); 
+  }
+}
+
+/* --- RE-ATTRIBUTION AUTO À L'ARRIVÉE D'UN MEMBRE --- */
+/**
+ * Si l'utilisateur a déjà un dossier valide en base, on lui rend le rôle
+ * directement (et on annule un éventuel retrait en attente).
+ */
+export async function handleMemberJoin(member: GuildMember): Promise<void> {
+  try {
+    const data = await findMemberByColumn(CONFIG.COL_DISCORD_ID, member.id);
+    if (!data || !data.cotisationValide) return;
+
+    const role = await member.guild.roles.fetch(CONFIG.VERIFY_ROLE_ID!);
+    if (!role) return;
+
+    if (!member.roles.cache.has(role.id)) {
+      await member.roles.add(role);
+      await sendLog(member.guild, member.id, data.email, "🔁 Rôle ré-attribué (retour sur le serveur)");
+    }
+    await clearPending(member.id);
+  } catch (e) {
+    console.error(`⚠️ Erreur handleMemberJoin (${member.id}):`, e);
   }
 }
 
@@ -97,20 +121,24 @@ export async function runDailyCheck(client: Client) {
         await sendLog(guild, m.discordId, m.email, "❌ Cotisation expirée - Rôle retiré", 0xFF0000);
         await clearPending(m.discordId);
         removedCount++;
-        await new Promise(r => setTimeout(r, 1000)); // Pause anti-spam
+        await sleep(1000); // Anti-spam API Discord
       } else if (CONFIG.RAPPEL_DESACTIVATION && !pending.reminded) {
         const removalDate = new Date(pending.firstDetectedAt + delayMs);
+        let dmOk = false;
         try {
           await dUser.send(
             `👋 Bonjour, ta cotisation à l'association n'apparaît pas comme à jour.\n` +
             `Sans régularisation, ton rôle sera retiré le **${removalDate.toLocaleDateString("fr-FR")}**.\n` +
-            `Si c'est une erreur, contacte un administrateur.`
+            `Si c'est une erreur, contacte un administrateur.`,
           );
+          dmOk = true;
           await sendLog(guild, m.discordId, m.email, "📨 Rappel DM envoyé (cotisation invalide)", 0xFFFF00);
         } catch (e) {
           console.error(`⚠️ Impossible d'envoyer le DM à ${m.email}:`, e);
+          await sendLog(guild, m.discordId, m.email, "⚠️ Rappel DM impossible (DMs fermés)", 0xFFA500);
         }
-        await setPending(m.discordId, { ...pending, reminded: true });
+        // On ne marque "reminded" que si le DM a réussi, pour autoriser un nouvel essai au prochain cycle
+        if (dmOk) await setPending(m.discordId, { ...pending, reminded: true });
       }
     } catch (e) {
       console.error(`⚠️ Erreur check (${m.email}):`, e);

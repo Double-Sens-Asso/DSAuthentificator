@@ -1,5 +1,6 @@
 // deno-lint-ignore-file no-explicit-any
 import { CONFIG as C } from "./config.ts";
+import { debug } from "./helpers.ts";
 import { NocoMember, VerificationResult } from "./types.ts";
 
 // Export de la config pour permettre le mocking dans les tests unitaires si besoin
@@ -14,9 +15,8 @@ export const CONFIG = C;
  * Gère l'authentification via token et la gestion des erreurs (HTML vs JSON).
  */
 async function nocoFetch<T>(path: string, options: RequestInit = {}): Promise<T> {
-  // [DEBUG] On affiche l'URL pour t'aider à trouver l'erreur de connexion
   const url = `${CONFIG.NOCODB_BASE_URL}${path}`;
-  console.log(`🔍 [DEBUG] Appel NocoDB : ${url}`);
+  debug(`NocoDB ${options.method ?? "GET"} ${url}`);
 
   const res = await fetch(url, {
     ...options,
@@ -32,13 +32,13 @@ async function nocoFetch<T>(path: string, options: RequestInit = {}): Promise<T>
 
   if (!res.ok) {
     console.error(`❌ Erreur HTTP ${res.status}`);
-    console.error(`📄 Réponse serveur : ${text.slice(0, 300)}...`); // Affiche le début de l'erreur
+    console.error(`📄 Réponse serveur : ${text.slice(0, 300)}...`);
     throw new Error(`Erreur NocoDB [${res.status}]`);
   }
 
   try {
     return JSON.parse(text) as T;
-  } catch (e) {
+  } catch (_e) {
     console.error("❌ Erreur JSON. Le serveur a renvoyé du HTML ou du texte brut :");
     console.error(text.slice(0, 500));
     throw new Error("Réponse invalide (Pas de JSON)");
@@ -55,12 +55,12 @@ export function cleanRecord(raw: any): NocoMember | null {
 
   // NocoDB encapsule parfois les données dans "fields"
   const data = raw.fields ? raw.fields : raw;
-  
+
   // Récupération sécurisée des valeurs
   const rawEmail = data[CONFIG.COL_EMAIL];
   const rawDiscordId = data[CONFIG.COL_DISCORD_ID];
   const rawCotis = data[CONFIG.COL_COTISATION];
-  
+
   // Logique pour la cotisation (gère booléens, strings "true", nombres 1, ou tableaux lookup)
   let isValid = false;
   if (rawCotis === true || rawCotis === "true" || rawCotis === 1 || rawCotis === "1") isValid = true;
@@ -97,31 +97,45 @@ export async function testConnection(): Promise<boolean> {
 export async function findMemberByColumn(colName: string, value: string): Promise<NocoMember | null> {
   // Filtre NocoDB : where=(Colonne,eq,Valeur)
   const where = `where=(${encodeURIComponent(colName)},eq,${encodeURIComponent(value)})`;
-  
-  const json = await nocoFetch<{ list?: any[], records?: any[] }>(
-    `/api/v3/data/${CONFIG.NOCODB_PROJECT_ID}/${CONFIG.NOCODB_TABLE_ID}/records?${where}&limit=1`
+
+  const json = await nocoFetch<{ list?: any[]; records?: any[] }>(
+    `/api/v3/data/${CONFIG.NOCODB_PROJECT_ID}/${CONFIG.NOCODB_TABLE_ID}/records?${where}&limit=1`,
   );
 
   // Compatibilité v3/v4 (certaines versions renvoient 'list', d'autres 'records')
   const list = json.list ?? json.records ?? [];
-  
+
   return list.length > 0 ? cleanRecord(list[0]) : null;
 }
 
 /**
  * Récupère tous les utilisateurs ayant déjà lié leur compte Discord.
+ * Pagine automatiquement pour ne pas être bloqué par la limite NocoDB.
  */
 export async function getAllLinkedUsers(): Promise<NocoMember[]> {
-  const json = await nocoFetch<{ list?: any[], records?: any[] }>(
-    `/api/v3/data/${CONFIG.NOCODB_PROJECT_ID}/${CONFIG.NOCODB_TABLE_ID}/records?limit=1000`
-  );
-  
-  const rawList = json.list ?? json.records ?? [];
-  
-  // On nettoie et on garde uniquement ceux qui ont un discordId valide
-  return rawList
-    .map(cleanRecord)
-    .filter((m): m is NocoMember => m !== null && !!m.discordId);
+  const pageSize = CONFIG.NOCODB_PAGE_SIZE;
+  const all: NocoMember[] = [];
+  let offset = 0;
+
+  // Garde-fou : on s'arrête quand on récupère moins que la pageSize ou après 50 pages.
+  for (let page = 0; page < 50; page++) {
+    const json = await nocoFetch<{ list?: any[]; records?: any[]; pageInfo?: { isLastPage?: boolean } }>(
+      `/api/v3/data/${CONFIG.NOCODB_PROJECT_ID}/${CONFIG.NOCODB_TABLE_ID}/records?limit=${pageSize}&offset=${offset}`,
+    );
+
+    const rawList = json.list ?? json.records ?? [];
+    if (rawList.length === 0) break;
+
+    for (const r of rawList) {
+      const m = cleanRecord(r);
+      if (m && m.discordId) all.push(m);
+    }
+
+    if (rawList.length < pageSize || json.pageInfo?.isLastPage) break;
+    offset += pageSize;
+  }
+
+  return all;
 }
 
 // -------------------------------------------------------------------------
@@ -130,7 +144,7 @@ export async function getAllLinkedUsers(): Promise<NocoMember[]> {
 
 export async function checkUserStatus(emailInput: string, discordIdInput: string): Promise<VerificationResult> {
   const email = emailInput.trim().toLowerCase();
-  
+
   // 1. Check : Ce compte Discord est-il déjà utilisé ?
   const existingDiscord = await findMemberByColumn(CONFIG.COL_DISCORD_ID, discordIdInput);
   if (existingDiscord && existingDiscord.email !== email) {
@@ -171,10 +185,10 @@ export async function checkUserStatus(emailInput: string, discordIdInput: string
 export async function linkDiscordUser(recordId: number, discordId: string): Promise<boolean> {
   try {
     const payload = [{ id: recordId, fields: { [CONFIG.COL_DISCORD_ID]: discordId } }];
-    
+
     await nocoFetch(`/api/v3/data/${CONFIG.NOCODB_PROJECT_ID}/${CONFIG.NOCODB_TABLE_ID}/records`, {
       method: "PATCH",
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
     });
     return true;
   } catch (e) {
@@ -188,15 +202,15 @@ export async function linkDiscordUser(recordId: number, discordId: string): Prom
  */
 export async function unlinkUserByEmail(email: string): Promise<{ success: boolean; message: string }> {
   const member = await findMemberByColumn(CONFIG.COL_EMAIL, email.toLowerCase());
-  
+
   if (!member || !member.discordId) {
     return { success: false, message: "Dossier introuvable ou non lié." };
   }
-  
+
   // On écrase l'ID avec une chaîne vide
   const success = await linkDiscordUser(member.recordId, "");
-  
-  return success 
+
+  return success
     ? { success: true, message: `✅ Liaison supprimée pour ${email}` }
     : { success: false, message: "Erreur technique lors de la déliaison." };
 }

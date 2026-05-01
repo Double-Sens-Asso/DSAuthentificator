@@ -50,3 +50,21 @@ export async function clearPending(discordId: string): Promise<void> {
     await save(store);
   }
 }
+
+/** Renvoie tous les retraits en attente, triés par date de détection croissante. */
+export async function getAllPending(): Promise<Array<PendingEntry & { discordId: string }>> {
+  const store = await load();
+  return Object.entries(store)
+    .map(([discordId, entry]) => ({ discordId, ...entry }))
+    .sort((a, b) => a.firstDetectedAt - b.firstDetectedAt);
+}
+
+/** Cherche un pending par email (insensible à la casse). */
+export async function findPendingByEmail(email: string): Promise<{ discordId: string; entry: PendingEntry } | null> {
+  const target = email.trim().toLowerCase();
+  const store = await load();
+  for (const [discordId, entry] of Object.entries(store)) {
+    if (entry.email.toLowerCase() === target) return { discordId, entry };
+  }
+  return null;
+}
