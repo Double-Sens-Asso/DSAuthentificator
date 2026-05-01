@@ -3,6 +3,7 @@ import { EmbedBuilder, ChannelType, ForumChannel, TextChannel, Guild, Client } f
 import nodemailer from "npm:nodemailer";
 import { CONFIG } from "./config.ts";
 import { getAllLinkedUsers } from "./nocodb.ts";
+import { clearPending, getPending, setPending } from "./pendingRemovals.ts";
 
 /* --- LOGS DISCORD --- */
 export async function sendLog(guild: Guild, discordId: string | null, email: string, status: string, color: number = 0x00FF00) {
@@ -38,7 +39,7 @@ export async function sendLog(guild: Guild, discordId: string | null, email: str
 /* --- CRON JOB (VERIFICATION AUTO) --- */
 export async function runDailyCheck(client: Client) {
   console.log("🔄 [AUTO] Vérification des cotisations...");
-  
+
   const guild = await client.guilds.fetch(CONFIG.GUILD_ID!);
   if (!guild) return;
 
@@ -46,27 +47,76 @@ export async function runDailyCheck(client: Client) {
   if (!role) return;
 
   const members = await getAllLinkedUsers();
+  const delayMs = CONFIG.DELAY_INVALID_COTISATION * 1000;
+  const now = Date.now();
   let removedCount = 0;
+  let pendingCount = 0;
 
   for (const m of members) {
     try {
       if (!m.discordId) continue;
-      
-      const dUser = await guild.members.fetch(m.discordId).catch(() => null);
-      if (!dUser) continue;
 
-      if (!m.cotisationValide && dUser.roles.cache.has(role.id)) {
-        console.log(`📉 [AUTO] Retrait rôle pour ${m.email}`);
+      const dUser = await guild.members.fetch(m.discordId).catch(() => null);
+      if (!dUser) {
+        await clearPending(m.discordId);
+        continue;
+      }
+
+      const hasRole = dUser.roles.cache.has(role.id);
+
+      if (m.cotisationValide || !hasRole) {
+        // Cotisation à jour (ou rôle déjà absent) -> on annule tout retrait en attente
+        await clearPending(m.discordId);
+        continue;
+      }
+
+      // Cotisation invalide ET le membre a encore le rôle
+      const pending = await getPending(m.discordId);
+
+      if (!pending) {
+        // Première détection : on enregistre l'horodatage et on attend
+        await setPending(m.discordId, { firstDetectedAt: now, email: m.email, reminded: false });
+        pendingCount++;
+        const removalDate = new Date(now + delayMs);
+        console.log(`⏳ [AUTO] Cotisation invalide détectée pour ${m.email} - retrait prévu le ${removalDate.toISOString()}`);
+        await sendLog(
+          guild,
+          m.discordId,
+          m.email,
+          `⏳ Cotisation invalide - retrait du rôle prévu le ${removalDate.toLocaleDateString("fr-FR")}`,
+          0xFFA500
+        );
+        continue;
+      }
+
+      const elapsed = now - pending.firstDetectedAt;
+
+      if (elapsed >= delayMs) {
+        console.log(`📉 [AUTO] Retrait rôle pour ${m.email} (délai écoulé)`);
         await dUser.roles.remove(role);
         await sendLog(guild, m.discordId, m.email, "❌ Cotisation expirée - Rôle retiré", 0xFF0000);
+        await clearPending(m.discordId);
         removedCount++;
         await new Promise(r => setTimeout(r, 1000)); // Pause anti-spam
+      } else if (CONFIG.RAPPEL_DESACTIVATION && !pending.reminded) {
+        const removalDate = new Date(pending.firstDetectedAt + delayMs);
+        try {
+          await dUser.send(
+            `👋 Bonjour, ta cotisation à l'association n'apparaît pas comme à jour.\n` +
+            `Sans régularisation, ton rôle sera retiré le **${removalDate.toLocaleDateString("fr-FR")}**.\n` +
+            `Si c'est une erreur, contacte un administrateur.`
+          );
+          await sendLog(guild, m.discordId, m.email, "📨 Rappel DM envoyé (cotisation invalide)", 0xFFFF00);
+        } catch (e) {
+          console.error(`⚠️ Impossible d'envoyer le DM à ${m.email}:`, e);
+        }
+        await setPending(m.discordId, { ...pending, reminded: true });
       }
-    } catch (e) { 
-      console.error(`⚠️ Erreur check (${m.email}):`, e); 
+    } catch (e) {
+      console.error(`⚠️ Erreur check (${m.email}):`, e);
     }
   }
-  console.log(`✅ [AUTO] Terminé. ${removedCount} rôle(s) retiré(s).`);
+  console.log(`✅ [AUTO] Terminé. ${removedCount} rôle(s) retiré(s), ${pendingCount} en attente.`);
 }
 
 /* --- SMTP (EMAILS) --- */

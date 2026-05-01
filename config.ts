@@ -8,6 +8,11 @@ export const CONFIG = {
   VERIFY_ROLE_ID: Deno.env.get("VERIFY_ROLE_ID"),
   ADMIN_ROLE_ID:  Deno.env.get("ADMIN_ROLE_ID"),
   LOG_CHANNEL_ID: Deno.env.get("LOG_CHANNEL_ID"),
+
+  // Délai (en secondes) entre la détection d'une cotisation invalide et le retrait du rôle
+  DELAY_INVALID_COTISATION: Number(Deno.env.get("DISCORD_DELAY_INVALID_COTISATION_DURATION") ?? 604800),
+  // Envoi d'un rappel DM avant le retrait effectif du rôle
+  RAPPEL_DESACTIVATION: (Deno.env.get("rappel_bot_desactivation") ?? "false").toLowerCase() === "true",
   
   // NocoDB
   NOCODB_BASE_URL:   Deno.env.get("NOCODB_BASE_URL")?.replace(/\/+$/, "") ?? "",

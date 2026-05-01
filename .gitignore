@@ -19,3 +19,6 @@ lerna-debug.log*
 
 # Coverage
 coverage/
+
+# Données runtime
+pending_removals.json
