@@ -2,7 +2,8 @@
   "tasks": {
     "dev": "deno run -A --env --watch main.ts",
     "start": "deno run -A --env main.ts",
-    "check": "deno check main.ts"
+    "check": "deno check main.ts",
+    "test": "deno test -A tests/"
   },
   "compilerOptions": {
     "lib": ["deno.window", "dom"]

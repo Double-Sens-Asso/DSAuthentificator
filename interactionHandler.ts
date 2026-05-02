@@ -17,13 +17,15 @@ import {
   TextInputStyle,
 } from "npm:discord.js@14";
 
-import { CONFIG, EMAIL_REGEX } from "./config.ts";
+import { CONFIG, EMAIL_MAX_LENGTH, EMAIL_REGEX } from "./config.ts";
 import { generateOtp } from "./helpers.ts";
 import { sendLog, sendVerificationCode } from "./utils.ts";
 import { checkUserStatus, findMemberByColumn, linkDiscordUser, unlinkUserByEmail } from "./nocodb.ts";
 import { deleteSession, getSession, incrementAttempt, setSession } from "./sessions.ts";
 import { checkRateLimit } from "./rateLimit.ts";
-import { clearPending, findPendingByEmail, getAllPending } from "./pendingRemovals.ts";
+import { clearPending, findPendingByEmail, getAllPending, getPending } from "./pendingRemovals.ts";
+
+const normalizeEmail = (e: string) => e.trim().toLowerCase();
 
 // -------------------------------------------------------------------------
 // Helpers
@@ -88,7 +90,7 @@ const slashHandlers: Record<string, (i: ChatInputCommandInteraction) => Promise<
       `💳 Cotisation : ${member.cotisationValide ? "✅ à jour" : "❌ non à jour"}`,
     ];
 
-    const pending = (await getAllPending()).find((p) => p.discordId === interaction.user.id);
+    const pending = await getPending(interaction.user.id);
     if (pending) {
       const removalDate = new Date(pending.firstDetectedAt + CONFIG.DELAY_INVALID_COTISATION * 1000);
       lines.push(`⏳ Retrait du rôle prévu le **${removalDate.toLocaleDateString("fr-FR")}**`);
@@ -100,14 +102,23 @@ const slashHandlers: Record<string, (i: ChatInputCommandInteraction) => Promise<
   "admin-unlink": async (interaction) => {
     if (await denyIfNotAdmin(interaction)) return;
     await interaction.deferReply({ flags: ephemeral });
-    const res = await unlinkUserByEmail(interaction.options.getString("email", true));
+    const email = normalizeEmail(interaction.options.getString("email", true));
+    const res = await unlinkUserByEmail(email);
     await interaction.editReply(res.message);
+    await sendLog(
+      interaction.guild!,
+      null,
+      email,
+      `🛠️ admin-unlink par <@${interaction.user.id}> — ${res.success ? "OK" : "ÉCHEC"}`,
+      res.success ? 0x5865F2 : 0xFFA500,
+    );
   },
 
   "admin-check": async (interaction) => {
     if (await denyIfNotAdmin(interaction)) return;
     await interaction.deferReply({ flags: ephemeral });
-    const data = await findMemberByColumn(CONFIG.COL_EMAIL, interaction.options.getString("email", true));
+    const email = normalizeEmail(interaction.options.getString("email", true));
+    const data = await findMemberByColumn(CONFIG.COL_EMAIL, email);
     await interaction.editReply(
       data
         ? `✅ Trouvé: ID ${data.recordId} | Cotis: ${data.cotisationValide} | Discord: ${data.discordId}`
@@ -140,7 +151,7 @@ const slashHandlers: Record<string, (i: ChatInputCommandInteraction) => Promise<
     if (await denyIfNotAdmin(interaction)) return;
     await interaction.deferReply({ flags: ephemeral });
 
-    const email = interaction.options.getString("email", true);
+    const email = normalizeEmail(interaction.options.getString("email", true));
     const found = await findPendingByEmail(email);
     if (!found) {
       await interaction.editReply(`ℹ️ Aucun retrait en attente pour \`${email}\`.`);
@@ -149,6 +160,13 @@ const slashHandlers: Record<string, (i: ChatInputCommandInteraction) => Promise<
 
     await clearPending(found.discordId);
     await interaction.editReply(`✅ Retrait annulé pour \`${email}\` (<@${found.discordId}>).`);
+    await sendLog(
+      interaction.guild!,
+      found.discordId,
+      email,
+      `🛠️ admin-cancel-removal par <@${interaction.user.id}>`,
+      0x5865F2,
+    );
   },
 };
 
@@ -201,9 +219,9 @@ const modalHandlers: Record<string, (i: ModalSubmitInteraction) => Promise<void>
   modal_email: async (interaction) => {
     await interaction.deferReply({ flags: ephemeral });
 
-    const email = interaction.fields.getTextInputValue("input_email").trim();
+    const email = normalizeEmail(interaction.fields.getTextInputValue("input_email"));
 
-    if (!EMAIL_REGEX.test(email)) {
+    if (email.length > EMAIL_MAX_LENGTH || !EMAIL_REGEX.test(email)) {
       await interaction.editReply("❌ Format d'email invalide.");
       return;
     }
@@ -281,8 +299,13 @@ const modalHandlers: Record<string, (i: ModalSubmitInteraction) => Promise<void>
       return;
     }
 
-    const role = interaction.guild?.roles.cache.get(CONFIG.VERIFY_ROLE_ID!);
-    if (role) await (interaction.member as GuildMember).roles.add(role);
+    // On fetch le rôle plutôt que de lire le cache (qui peut ne pas être hydraté).
+    const role = await interaction.guild?.roles.fetch(CONFIG.VERIFY_ROLE_ID!).catch(() => null);
+    if (role) {
+      await (interaction.member as GuildMember).roles.add(role);
+    } else {
+      console.error(`❌ VERIFY_ROLE_ID introuvable côté Discord pour ${session.email}`);
+    }
     // L'utilisateur s'étant ré-authentifié, on annule tout retrait éventuellement programmé.
     await clearPending(interaction.user.id);
 

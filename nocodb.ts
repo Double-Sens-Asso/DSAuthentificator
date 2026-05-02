@@ -1,10 +1,7 @@
 // deno-lint-ignore-file no-explicit-any
-import { CONFIG as C } from "./config.ts";
+import { CONFIG } from "./config.ts";
 import { debug } from "./helpers.ts";
 import { NocoMember, VerificationResult } from "./types.ts";
-
-// Export de la config pour permettre le mocking dans les tests unitaires si besoin
-export const CONFIG = C;
 
 // -------------------------------------------------------------------------
 // 1. FONCTIONS UTILITAIRES INTERNES (HELPERS)

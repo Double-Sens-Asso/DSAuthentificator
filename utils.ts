@@ -1,5 +1,15 @@
 // deno-lint-ignore-file no-import-prefix no-unversioned-import
-import { ChannelType, Client, EmbedBuilder, ForumChannel, Guild, GuildMember, TextChannel } from "npm:discord.js@14";
+import {
+  ChannelType,
+  Client,
+  DiscordAPIError,
+  EmbedBuilder,
+  ForumChannel,
+  Guild,
+  GuildMember,
+  RESTJSONErrorCodes,
+  TextChannel,
+} from "npm:discord.js@14";
 import nodemailer from "npm:nodemailer";
 import { CONFIG } from "./config.ts";
 import { sleep } from "./helpers.ts";
@@ -80,9 +90,16 @@ export async function runDailyCheck(client: Client) {
     try {
       if (!m.discordId) continue;
 
-      const dUser = await guild.members.fetch(m.discordId).catch(() => null);
-      if (!dUser) {
-        await clearPending(m.discordId);
+      let dUser: GuildMember | null = null;
+      try {
+        dUser = await guild.members.fetch(m.discordId);
+      } catch (err) {
+        // Membre vraiment absent du serveur -> on nettoie. Erreur transitoire -> on saute, on retentera.
+        if (err instanceof DiscordAPIError && err.code === RESTJSONErrorCodes.UnknownMember) {
+          await clearPending(m.discordId);
+        } else {
+          console.error(`⚠️ fetch member ${m.email} a échoué (transitoire) :`, err);
+        }
         continue;
       }
 
@@ -158,20 +175,26 @@ const transporter = nodemailer.createTransport({
   },
 });
 
+// Template HTML chargé une fois au démarrage.
+const EMAIL_TEMPLATE_PATH = new URL("./assets/verification-email.html", import.meta.url).pathname;
+const EMAIL_TEMPLATE = await Deno.readTextFile(EMAIL_TEMPLATE_PATH).catch((e) => {
+  console.error(`⚠️ Impossible de charger ${EMAIL_TEMPLATE_PATH}:`, e);
+  return "Code: {{code}} (valable {{ttl_minutes}} min)";
+});
+
+function renderEmail(code: string, ttlMinutes: number): string {
+  return EMAIL_TEMPLATE.replaceAll("{{code}}", code).replaceAll("{{ttl_minutes}}", String(ttlMinutes));
+}
+
 export async function sendVerificationCode(email: string, code: string): Promise<boolean> {
+  const ttlMinutes = Math.round(CONFIG.OTP_TTL_SECONDS / 60);
   try {
     await transporter.sendMail({
-      from: `"Bot Adhésion" <${CONFIG.SMTP_FROM}>`, 
+      from: `"Bot Adhésion" <${CONFIG.SMTP_FROM}>`,
       to: email,
       subject: "🔐 Ton code de vérification Discord",
-      text: `Voici ton code : ${code}. Valable 10 minutes.`,
-      html: `<div style="font-family: sans-serif; padding: 20px; border: 1px solid #ddd; border-radius: 5px;">
-               <h2>Vérification Adhésion</h2>
-               <p>Voici ton code de sécurité pour lier ton compte Discord :</p>
-               <h1 style="color: #5865F2; letter-spacing: 5px;">${code}</h1>
-               <p>Ce code expire dans 10 minutes.</p>
-               <p style="font-size: 12px; color: #888;">Si tu n'as pas demandé ce code, ignore cet email.</p>
-             </div>`,
+      text: `Voici ton code : ${code}. Valable ${ttlMinutes} minutes.`,
+      html: renderEmail(code, ttlMinutes),
     });
     console.log(`📧 Email envoyé à ${email} via ${CONFIG.SMTP_HOST}`);
     return true;
