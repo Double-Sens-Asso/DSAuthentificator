@@ -16,7 +16,6 @@ import { sleep } from "./helpers.ts";
 import { findMemberByColumn, getAllLinkedUsers } from "./nocodb.ts";
 import { clearPending, getPending, setPending } from "./pendingRemovals.ts";
 
-/* --- LOGS DISCORD --- */
 export async function sendLog(guild: Guild, discordId: string | null, email: string, status: string, color: number = 0x00FF00) {
   if (!CONFIG.LOG_CHANNEL_ID) return;
 
@@ -29,29 +28,24 @@ export async function sendLog(guild: Guild, discordId: string | null, email: str
       .setDescription(discordId ? `Concerne : <@${discordId}>` : `Concerne : ${email}`)
       .addFields(
         { name: "Email", value: email, inline: true },
-        { name: "Info", value: status, inline: true }
+        { name: "Info", value: status, inline: true },
       )
       .setColor(color)
       .setTimestamp();
 
     if (channel.type === ChannelType.GuildForum) {
-      await (channel as ForumChannel).threads.create({ 
-        name: `Log: ${email}`, 
-        message: { embeds: [embed] } 
+      await (channel as ForumChannel).threads.create({
+        name: `Log: ${email}`,
+        message: { embeds: [embed] },
       });
     } else if (channel.isTextBased()) {
       await (channel as TextChannel).send({ embeds: [embed] });
     }
-  } catch (e) { 
-    console.error("❌ Erreur log:", e); 
+  } catch (e) {
+    console.error("❌ Erreur log:", e);
   }
 }
 
-/* --- RE-ATTRIBUTION AUTO À L'ARRIVÉE D'UN MEMBRE --- */
-/**
- * Si l'utilisateur a déjà un dossier valide en base, on lui rend le rôle
- * directement (et on annule un éventuel retrait en attente).
- */
 export async function handleMemberJoin(member: GuildMember): Promise<void> {
   try {
     const data = await findMemberByColumn(CONFIG.COL_DISCORD_ID, member.id);
@@ -70,7 +64,6 @@ export async function handleMemberJoin(member: GuildMember): Promise<void> {
   }
 }
 
-/* --- CRON JOB (VERIFICATION AUTO) --- */
 export async function runDailyCheck(client: Client) {
   console.log("🔄 [AUTO] Vérification des cotisations...");
 
@@ -80,105 +73,147 @@ export async function runDailyCheck(client: Client) {
   const role = await guild.roles.fetch(CONFIG.VERIFY_ROLE_ID!);
   if (!role) return;
 
-  const members = await getAllLinkedUsers();
+  // Hydrate le cache (nécessaire pour role.members plus bas)
+  await guild.members.fetch().catch((e) => {
+    console.error("⚠️ guild.members.fetch a échoué :", e);
+  });
+
+  let members;
+  try {
+    members = await getAllLinkedUsers();
+  } catch (e) {
+    console.error("⚠️ Échec lecture NocoDB :", e);
+    await sendLog(guild, null, "(système)", `⚠️ NocoDB inaccessible : ${e instanceof Error ? e.message : e}`, 0xFF0000);
+    return;
+  }
+
   const delayMs = CONFIG.DELAY_INVALID_COTISATION * 1000;
+  const intervalMs = CONFIG.CHECK_INTERVAL_SECONDS * 1000;
   const now = Date.now();
+  const linkedIds = new Set<string>();
   let removedCount = 0;
   let pendingCount = 0;
+  let restoredCount = 0;
 
   for (const m of members) {
-    try {
-      if (!m.discordId) continue;
+    if (!m.discordId) continue;
+    linkedIds.add(m.discordId);
 
-      let dUser: GuildMember | null = null;
+    try {
+      let dUser: GuildMember;
       try {
         dUser = await guild.members.fetch(m.discordId);
       } catch (err) {
-        // Membre vraiment absent du serveur -> on nettoie. Erreur transitoire -> on saute, on retentera.
         if (err instanceof DiscordAPIError && err.code === RESTJSONErrorCodes.UnknownMember) {
           await clearPending(m.discordId);
         } else {
-          console.error(`⚠️ fetch member ${m.email} a échoué (transitoire) :`, err);
+          console.error(`⚠️ fetch member ${m.email} (transitoire) :`, err);
         }
         continue;
       }
 
       const hasRole = dUser.roles.cache.has(role.id);
 
-      if (m.cotisationValide || !hasRole) {
-        // Cotisation à jour (ou rôle déjà absent) -> on annule tout retrait en attente
+      if (m.cotisationValide) {
+        if (!hasRole) {
+          await dUser.roles.add(role);
+          await sendLog(guild, m.discordId, m.email, "✅ Cotisation à jour - Rôle ré-attribué", 0x00FF00);
+          restoredCount++;
+          await sleep(1000);
+        }
         await clearPending(m.discordId);
         continue;
       }
 
-      // Cotisation invalide ET le membre a encore le rôle
+      if (!hasRole) {
+        await clearPending(m.discordId);
+        continue;
+      }
+
       const pending = await getPending(m.discordId);
 
       if (!pending) {
-        // Première détection : on enregistre l'horodatage et on attend
         await setPending(m.discordId, { firstDetectedAt: now, email: m.email, reminded: false });
         pendingCount++;
         const removalDate = new Date(now + delayMs);
-        console.log(`⏳ [AUTO] Cotisation invalide détectée pour ${m.email} - retrait prévu le ${removalDate.toISOString()}`);
         await sendLog(
           guild,
           m.discordId,
           m.email,
           `⏳ Cotisation invalide - retrait du rôle prévu le ${removalDate.toLocaleDateString("fr-FR")}`,
-          0xFFA500
+          0xFFA500,
         );
         continue;
       }
 
       const elapsed = now - pending.firstDetectedAt;
+      const remaining = delayMs - elapsed;
 
       if (elapsed >= delayMs) {
-        console.log(`📉 [AUTO] Retrait rôle pour ${m.email} (délai écoulé)`);
         await dUser.roles.remove(role);
         await sendLog(guild, m.discordId, m.email, "❌ Cotisation expirée - Rôle retiré", 0xFF0000);
         await clearPending(m.discordId);
         removedCount++;
-        await sleep(1000); // Anti-spam API Discord
-      } else if (CONFIG.RAPPEL_DESACTIVATION && !pending.reminded) {
+        await sleep(1000);
+        continue;
+      }
+
+      // Rappel DM "juste avant" le retrait : dans la dernière fenêtre cron avant l'échéance.
+      if (CONFIG.RAPPEL_DESACTIVATION && !pending.reminded && remaining <= intervalMs * 1.5) {
         const removalDate = new Date(pending.firstDetectedAt + delayMs);
         let dmOk = false;
         try {
           await dUser.send(
             `👋 Bonjour, ta cotisation à l'association n'apparaît pas comme à jour.\n` +
-            `Sans régularisation, ton rôle sera retiré le **${removalDate.toLocaleDateString("fr-FR")}**.\n` +
-            `Si c'est une erreur, contacte un administrateur.`,
+              `Sans régularisation, ton rôle sera retiré le **${removalDate.toLocaleDateString("fr-FR")}**.\n` +
+              `Si c'est une erreur, contacte un administrateur.`,
           );
           dmOk = true;
           await sendLog(guild, m.discordId, m.email, "📨 Rappel DM envoyé (cotisation invalide)", 0xFFFF00);
         } catch (e) {
-          console.error(`⚠️ Impossible d'envoyer le DM à ${m.email}:`, e);
+          console.error(`⚠️ DM impossible (${m.email}) :`, e);
           await sendLog(guild, m.discordId, m.email, "⚠️ Rappel DM impossible (DMs fermés)", 0xFFA500);
         }
-        // On ne marque "reminded" que si le DM a réussi, pour autoriser un nouvel essai au prochain cycle
         if (dmOk) await setPending(m.discordId, { ...pending, reminded: true });
       }
     } catch (e) {
-      console.error(`⚠️ Erreur check (${m.email}):`, e);
+      console.error(`⚠️ Erreur check (${m.email}) :`, e);
     }
   }
-  console.log(`✅ [AUTO] Terminé. ${removedCount} rôle(s) retiré(s), ${pendingCount} en attente.`);
+
+  // Retrait des rôles "orphelins" : membres ayant le rôle mais sans liaison NocoDB
+  // (typiquement après /admin-unlink, ou un rôle attribué manuellement à un non-adhérent).
+  let orphanCount = 0;
+  for (const [, member] of role.members) {
+    if (linkedIds.has(member.id)) continue;
+    try {
+      await member.roles.remove(role);
+      await sendLog(guild, member.id, "(non lié)", "❌ Rôle retiré (aucune liaison en base)", 0xFF0000);
+      orphanCount++;
+      await sleep(1000);
+    } catch (e) {
+      console.error(`⚠️ Retrait orphelin ${member.id} :`, e);
+    }
+  }
+
+  console.log(
+    `✅ [AUTO] Terminé. ${restoredCount} ré-attribué(s), ${pendingCount} en attente, ${removedCount} retiré(s), ${orphanCount} orphelin(s).`,
+  );
 }
 
-/* --- SMTP (EMAILS) --- */
 const transporter = nodemailer.createTransport({
   host: CONFIG.SMTP_HOST,
   port: CONFIG.SMTP_PORT,
-  secure: false, // false pour le port 587
-  auth: { 
-    user: CONFIG.SMTP_USER, // Identifiant technique Brevo
-    pass: CONFIG.SMTP_PASS  // Mot de passe Brevo
+  secure: false,
+  auth: {
+    user: CONFIG.SMTP_USER,
+    pass: CONFIG.SMTP_PASS,
   },
 });
 
-// Template HTML chargé une fois au démarrage.
 const EMAIL_TEMPLATE_PATH = new URL("./assets/verification-email.html", import.meta.url).pathname;
 const EMAIL_TEMPLATE = await Deno.readTextFile(EMAIL_TEMPLATE_PATH).catch((e) => {
-  console.error(`⚠️ Impossible de charger ${EMAIL_TEMPLATE_PATH}:`, e);
+  console.error(`⚠️ Impossible de charger ${EMAIL_TEMPLATE_PATH} :`, e);
   return "Code: {{code}} (valable {{ttl_minutes}} min)";
 });
 
@@ -196,10 +231,10 @@ export async function sendVerificationCode(email: string, code: string): Promise
       text: `Voici ton code : ${code}. Valable ${ttlMinutes} minutes.`,
       html: renderEmail(code, ttlMinutes),
     });
-    console.log(`📧 Email envoyé à ${email} via ${CONFIG.SMTP_HOST}`);
+    console.log(`📧 Email envoyé à ${email}`);
     return true;
   } catch (e) {
-    console.error("❌ Erreur envoi email:", e);
+    console.error("❌ Erreur envoi email :", e);
     return false;
   }
 }

@@ -25,15 +25,9 @@ import { deleteSession, getSession, incrementAttempt, setSession } from "./sessi
 import { checkRateLimit } from "./rateLimit.ts";
 import { clearPending, findPendingByEmail, getAllPending, getPending } from "./pendingRemovals.ts";
 
+const ephemeral = MessageFlags.Ephemeral;
 const normalizeEmail = (e: string) => e.trim().toLowerCase();
 
-// -------------------------------------------------------------------------
-// Helpers
-// -------------------------------------------------------------------------
-
-const ephemeral = MessageFlags.Ephemeral;
-
-/** Renvoie true si le membre a le rôle admin configuré. */
 function isAdmin(member: GuildMember | null): boolean {
   if (!member || !CONFIG.ADMIN_ROLE_ID) return false;
   return member.roles.cache.has(CONFIG.ADMIN_ROLE_ID);
@@ -44,10 +38,6 @@ async function denyIfNotAdmin(interaction: ChatInputCommandInteraction): Promise
   await interaction.reply({ content: "⛔ Tu n'as pas la permission d'utiliser cette commande.", flags: ephemeral });
   return true;
 }
-
-// -------------------------------------------------------------------------
-// Slash commands
-// -------------------------------------------------------------------------
 
 const slashHandlers: Record<string, (i: ChatInputCommandInteraction) => Promise<void>> = {
   ping: async (interaction) => {
@@ -139,8 +129,8 @@ const slashHandlers: Record<string, (i: ChatInputCommandInteraction) => Promise<
     const delayMs = CONFIG.DELAY_INVALID_COTISATION * 1000;
     const lines = pending.slice(0, 25).map((p) => {
       const removal = new Date(p.firstDetectedAt + delayMs).toLocaleDateString("fr-FR");
-      const reminded = p.reminded ? "📨" : "  ";
-      return `${reminded} <@${p.discordId}> — \`${p.email}\` — retrait prévu le ${removal}`;
+      const motif = p.reminded ? "Cotisation invalide (rappel envoyé)" : "Cotisation invalide";
+      return `<@${p.discordId}> — \`${p.email}\` — retrait le ${removal} — ${motif}`;
     });
 
     const overflow = pending.length > 25 ? `\n_(+${pending.length - 25} autres)_` : "";
@@ -169,10 +159,6 @@ const slashHandlers: Record<string, (i: ChatInputCommandInteraction) => Promise<
     );
   },
 };
-
-// -------------------------------------------------------------------------
-// Bouton handlers
-// -------------------------------------------------------------------------
 
 const buttonHandlers: Record<string, (i: ButtonInteraction) => Promise<void>> = {
   btn_verify_start: async (interaction) => {
@@ -211,10 +197,6 @@ const buttonHandlers: Record<string, (i: ButtonInteraction) => Promise<void>> = 
   },
 };
 
-// -------------------------------------------------------------------------
-// Modal handlers
-// -------------------------------------------------------------------------
-
 const modalHandlers: Record<string, (i: ModalSubmitInteraction) => Promise<void>> = {
   modal_email: async (interaction) => {
     await interaction.deferReply({ flags: ephemeral });
@@ -226,7 +208,6 @@ const modalHandlers: Record<string, (i: ModalSubmitInteraction) => Promise<void>
       return;
     }
 
-    // Rate-limit : éviter les abus d'envoi d'emails
     const rl = checkRateLimit(
       `verify:${interaction.user.id}`,
       CONFIG.VERIFY_RATE_LIMIT_MAX,
@@ -235,12 +216,14 @@ const modalHandlers: Record<string, (i: ModalSubmitInteraction) => Promise<void>
     if (!rl.allowed) {
       const minutes = Math.ceil(rl.retryAfter / 60);
       await interaction.editReply(`⏱️ Trop de tentatives. Réessaie dans ~${minutes} min.`);
+      await sendLog(interaction.guild!, interaction.user.id, email, "⏱️ Vérification refusée (rate-limit)", 0xFFA500);
       return;
     }
 
     const status = await checkUserStatus(email, interaction.user.id);
     if (!status.valid || !status.member) {
       await interaction.editReply(status.message);
+      await sendLog(interaction.guild!, interaction.user.id, email, `❌ Échec /verify : ${status.message}`, 0xFFA500);
       return;
     }
 
@@ -248,6 +231,7 @@ const modalHandlers: Record<string, (i: ModalSubmitInteraction) => Promise<void>
     const sent = await sendVerificationCode(email, code);
     if (!sent) {
       await interaction.editReply("❌ Erreur technique lors de l'envoi de l'email. Contacte un admin.");
+      await sendLog(interaction.guild!, interaction.user.id, email, "⚠️ Échec d'envoi SMTP", 0xFF0000);
       return;
     }
 
@@ -286,27 +270,26 @@ const modalHandlers: Record<string, (i: ModalSubmitInteraction) => Promise<void>
       if (remaining <= 0) {
         await deleteSession(interaction.user.id);
         await interaction.editReply("❌ Trop de tentatives. Recommence depuis le début avec `/verify`.");
+        await sendLog(interaction.guild!, interaction.user.id, session.email, "❌ Session invalidée (trop de tentatives)", 0xFF0000);
         return;
       }
       await interaction.editReply(`❌ Code incorrect. ${remaining} tentative(s) restante(s).`);
       return;
     }
 
-    // --- SUCCÈS ---
     const success = await linkDiscordUser(session.recordId, interaction.user.id);
     if (!success) {
       await interaction.editReply("❌ Erreur critique lors de l'enregistrement dans la base de données.");
+      await sendLog(interaction.guild!, interaction.user.id, session.email, "⚠️ Échec écriture NocoDB", 0xFF0000);
       return;
     }
 
-    // On fetch le rôle plutôt que de lire le cache (qui peut ne pas être hydraté).
     const role = await interaction.guild?.roles.fetch(CONFIG.VERIFY_ROLE_ID!).catch(() => null);
     if (role) {
       await (interaction.member as GuildMember).roles.add(role);
     } else {
       console.error(`❌ VERIFY_ROLE_ID introuvable côté Discord pour ${session.email}`);
     }
-    // L'utilisateur s'étant ré-authentifié, on annule tout retrait éventuellement programmé.
     await clearPending(interaction.user.id);
 
     await sendLog(interaction.guild!, interaction.user.id, session.email, "✅ Succès (Vérifié par Code)");
@@ -315,10 +298,6 @@ const modalHandlers: Record<string, (i: ModalSubmitInteraction) => Promise<void>
   },
 };
 
-// -------------------------------------------------------------------------
-// Dispatcher
-// -------------------------------------------------------------------------
-
 export async function handleInteraction(interaction: Interaction<CacheType>) {
   try {
     if (interaction.isChatInputCommand()) {
@@ -326,13 +305,11 @@ export async function handleInteraction(interaction: Interaction<CacheType>) {
       if (handler) await handler(interaction);
       return;
     }
-
     if (interaction.isButton()) {
       const handler = buttonHandlers[interaction.customId];
       if (handler) await handler(interaction);
       return;
     }
-
     if (interaction.isModalSubmit()) {
       const handler = modalHandlers[interaction.customId];
       if (handler) await handler(interaction);
