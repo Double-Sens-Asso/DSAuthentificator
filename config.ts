@@ -55,7 +55,7 @@ export const CONFIG = {
 };
 
 // Vérification critique au démarrage
-const requiredKeys = ["TOKEN", "GUILD_ID", "VERIFY_ROLE_ID", "NOCODB_TOKEN", "SMTP_HOST", "SMTP_USER", "SMTP_PASS"];
+const requiredKeys = ["TOKEN", "GUILD_ID", "VERIFY_ROLE_ID", "NOCODB_TOKEN", "SMTP_HOST", "SMTP_USER", "SMTP_PASS", "SMTP_FROM"];
 for (const key of requiredKeys) {
   // @ts-ignore : Accès dynamique aux clés
   if (!CONFIG[key]) {

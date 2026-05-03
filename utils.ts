@@ -221,7 +221,12 @@ function renderEmail(code: string, ttlMinutes: number): string {
   return EMAIL_TEMPLATE.replaceAll("{{code}}", code).replaceAll("{{ttl_minutes}}", String(ttlMinutes));
 }
 
-export async function sendVerificationCode(email: string, code: string): Promise<boolean> {
+export interface SendResult {
+  ok: boolean;
+  error?: string;
+}
+
+export async function sendVerificationCode(email: string, code: string): Promise<SendResult> {
   const ttlMinutes = Math.round(CONFIG.OTP_TTL_SECONDS / 60);
   try {
     await transporter.sendMail({
@@ -232,9 +237,10 @@ export async function sendVerificationCode(email: string, code: string): Promise
       html: renderEmail(code, ttlMinutes),
     });
     console.log(`📧 Email envoyé à ${email}`);
-    return true;
+    return { ok: true };
   } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
     console.error("❌ Erreur envoi email :", e);
-    return false;
+    return { ok: false, error: msg };
   }
 }

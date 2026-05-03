@@ -228,10 +228,11 @@ const modalHandlers: Record<string, (i: ModalSubmitInteraction) => Promise<void>
     }
 
     const code = generateOtp();
-    const sent = await sendVerificationCode(email, code);
-    if (!sent) {
+    const result = await sendVerificationCode(email, code);
+    if (!result.ok) {
       await interaction.editReply("❌ Erreur technique lors de l'envoi de l'email. Contacte un admin.");
-      await sendLog(interaction.guild!, interaction.user.id, email, "⚠️ Échec d'envoi SMTP", 0xFF0000);
+      const detail = result.error ? ` : ${result.error.slice(0, 200)}` : "";
+      await sendLog(interaction.guild!, interaction.user.id, email, `⚠️ Échec d'envoi SMTP${detail}`, 0xFF0000);
       return;
     }
 
