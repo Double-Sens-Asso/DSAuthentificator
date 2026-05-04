@@ -1,11 +1,6 @@
 import { SlashCommandBuilder } from "npm:discord.js@14";
 
-/**
- * Note sur les permissions :
- * Les commandes admin sont visibles par tous mais filtrées côté code via `ADMIN_ROLE_ID`
- * (cf. `interactionHandler.ts` -> `denyIfNotAdmin`). On ne pose PAS `setDefaultMemberPermissions`
- * pour éviter une double source de vérité (Discord + code) source d'incohérences.
- */
+// Permissions admin filtrées côté code via ADMIN_ROLE_ID (cf. denyIfNotAdmin).
 export const commands = [
   // Public
   new SlashCommandBuilder()

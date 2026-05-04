@@ -16,6 +16,7 @@ const REQUIRED: Record<string, string> = {
   SMTP_HOST: "localhost",
   SMTP_USER: "test@example.com",
   SMTP_PASS: "test-pass",
+  SMTP_FROM: "noreply@example.com",
 };
 
 for (const [k, v] of Object.entries(REQUIRED)) {

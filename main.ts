@@ -13,11 +13,7 @@ const client = new Client({
 
 let stopping = false;
 
-/**
- * Planifie `runDailyCheck` toutes les `CHECK_INTERVAL_SECONDS` secondes.
- * Utilise setTimeout récursif (et pas setInterval) pour ne pas accumuler les
- * exécutions si une passe est plus longue que l'intervalle.
- */
+// Cron : setTimeout récursif pour ne pas accumuler les exécutions si une passe dépasse l'intervalle.
 function scheduleCheck() {
   const intervalMs = CONFIG.CHECK_INTERVAL_SECONDS * 1000;
   const tick = async () => {
@@ -33,7 +29,6 @@ function scheduleCheck() {
   tick();
 }
 
-/** Arrêt propre : ferme le client Discord avant de quitter. */
 async function shutdown(reason: string) {
   if (stopping) return;
   stopping = true;
@@ -46,7 +41,6 @@ async function shutdown(reason: string) {
   Deno.exit(0);
 }
 
-// Filets de sécurité globaux : on ne veut pas qu'une promesse oubliée tue le bot silencieusement.
 globalThis.addEventListener("unhandledrejection", (event) => {
   event.preventDefault();
   console.error("⚠️ Promesse rejetée non catchée :", event.reason);
@@ -59,9 +53,7 @@ globalThis.addEventListener("error", (event) => {
 for (const sig of ["SIGINT", "SIGTERM"] as const) {
   try {
     Deno.addSignalListener(sig, () => shutdown(sig));
-  } catch (_) {
-    // Certaines plateformes (Windows) ne supportent pas tous les signaux ; pas critique.
-  }
+  } catch (_) { /* signal non supporté sur la plateforme courante */ }
 }
 
 client.once(Events.ClientReady, async () => {

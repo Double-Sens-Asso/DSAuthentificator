@@ -73,10 +73,7 @@ export async function runDailyCheck(client: Client) {
   const role = await guild.roles.fetch(CONFIG.VERIFY_ROLE_ID!);
   if (!role) return;
 
-  // Hydrate le cache (nécessaire pour role.members plus bas)
-  await guild.members.fetch().catch((e) => {
-    console.error("⚠️ guild.members.fetch a échoué :", e);
-  });
+  await guild.members.fetch().catch((e) => console.error("⚠️ guild.members.fetch :", e));
 
   let members;
   try {
@@ -158,7 +155,7 @@ export async function runDailyCheck(client: Client) {
         continue;
       }
 
-      // Rappel DM "juste avant" le retrait : dans la dernière fenêtre cron avant l'échéance.
+      // Rappel DM dans la dernière fenêtre cron avant retrait
       if (CONFIG.RAPPEL_DESACTIVATION && !pending.reminded && remaining <= intervalMs * 1.5) {
         const removalDate = new Date(pending.firstDetectedAt + delayMs);
         let dmOk = false;
@@ -181,8 +178,7 @@ export async function runDailyCheck(client: Client) {
     }
   }
 
-  // Retrait des rôles "orphelins" : membres ayant le rôle mais sans liaison NocoDB
-  // (typiquement après /admin-unlink, ou un rôle attribué manuellement à un non-adhérent).
+  // Retrait des rôles orphelins (porteurs du rôle sans liaison en base)
   let orphanCount = 0;
   for (const [, member] of role.members) {
     if (linkedIds.has(member.id)) continue;
