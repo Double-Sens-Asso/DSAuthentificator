@@ -3,6 +3,7 @@
 node_modules
 *.md
 tests
+data
 .env
 .env.*
 !.env.example

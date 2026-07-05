@@ -1,7 +1,7 @@
 // deno-lint-ignore-file no-import-prefix
 import "./_env.ts";
 import { assertEquals } from "jsr:@std/assert";
-import { cleanRecord } from "../nocodb.ts";
+import { cleanRecord } from "../src/infrastructure/nocodb/members.repo.ts";
 
 Deno.test("cleanRecord - record basique avec id et booléen true", () => {
   const r = cleanRecord({ id: 1, mail: "Foo@Example.COM", IdDiscord: "123", cotisationValide: true });

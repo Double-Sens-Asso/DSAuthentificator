@@ -1,21 +1,22 @@
 // deno-lint-ignore-file no-import-prefix
 import "./_env.ts";
 import { assert, assertEquals } from "jsr:@std/assert";
-import { CONFIG } from "../config.ts";
+import { CONFIG } from "../src/config/config.ts";
 import {
   deleteSession,
   getSession,
   incrementAttempt,
   type OtpSession,
+  SESSIONS_FILE,
   setSession,
-} from "../sessions.ts";
+} from "../src/infrastructure/storage/sessions.store.ts";
 
 /**
  * Le module persiste sur `<projet>/otp_sessions.json`. On ne peut pas rediriger
  * ce chemin depuis l'extérieur, donc on travaille sur le fichier réel en
  * sauvegardant son contenu avant chaque test pour le restaurer ensuite.
  */
-const STORE_PATH = new URL("../otp_sessions.json", import.meta.url).pathname;
+const STORE_PATH = SESSIONS_FILE;
 
 async function readMaybe(path: string): Promise<string | null> {
   try {

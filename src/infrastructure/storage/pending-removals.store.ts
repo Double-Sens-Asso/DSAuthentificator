@@ -1,3 +1,4 @@
+// deno-lint-ignore-file no-import-prefix no-unversioned-import
 /**
  * Persistance des retraits de rôle en attente.
  * Quand une cotisation est détectée invalide, on n'enlève pas le rôle tout de suite :
@@ -7,9 +8,11 @@
  * et sérialisée (pas de race conditions).
  */
 
-import { JsonStore } from "./jsonStore.ts";
+import { join } from "jsr:@std/path";
+import { DATA_DIR } from "../../config/paths.ts";
+import { JsonStore } from "./json-store.ts";
 
-const FILE_PATH = new URL("./pending_removals.json", import.meta.url).pathname;
+export const PENDING_FILE = join(DATA_DIR, "pending_removals.json");
 
 export interface PendingEntry {
   /** Timestamp (ms) de la première détection de cotisation invalide */
@@ -23,7 +26,7 @@ export interface PendingEntry {
 
 type Store = Record<string, PendingEntry>; // clé = discordId
 
-const store = new JsonStore<Store>(FILE_PATH, () => ({}));
+const store = new JsonStore<Store>(PENDING_FILE, () => ({}));
 
 export function getPending(discordId: string): Promise<PendingEntry | null> {
   return store.read((s) => s[discordId] ?? null);

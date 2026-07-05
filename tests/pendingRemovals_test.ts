@@ -6,10 +6,11 @@ import {
   findPendingByEmail,
   getAllPending,
   getPending,
+  PENDING_FILE,
   setPending,
-} from "../pendingRemovals.ts";
+} from "../src/infrastructure/storage/pending-removals.store.ts";
 
-const STORE_PATH = new URL("../pending_removals.json", import.meta.url).pathname;
+const STORE_PATH = PENDING_FILE;
 
 async function readMaybe(path: string): Promise<string | null> {
   try {

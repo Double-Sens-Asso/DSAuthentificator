@@ -63,7 +63,3 @@ for (const key of requiredKeys) {
     Deno.exit(1);
   }
 }
-
-export const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-/** Limite RFC 5321 sur la longueur d'une adresse email. */
-export const EMAIL_MAX_LENGTH = 254;

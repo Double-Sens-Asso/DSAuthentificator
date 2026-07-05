@@ -1,3 +1,4 @@
+// deno-lint-ignore-file no-import-prefix no-unversioned-import
 /**
  * Sessions OTP en cours de vérification.
  * - Persistées sur disque pour survivre à un redémarrage du bot.
@@ -8,10 +9,12 @@
  * et sérialisée (pas de race conditions).
  */
 
-import { CONFIG } from "./config.ts";
-import { JsonStore } from "./jsonStore.ts";
+import { join } from "jsr:@std/path";
+import { CONFIG } from "../../config/config.ts";
+import { DATA_DIR } from "../../config/paths.ts";
+import { JsonStore } from "./json-store.ts";
 
-const FILE_PATH = new URL("./otp_sessions.json", import.meta.url).pathname;
+export const SESSIONS_FILE = join(DATA_DIR, "otp_sessions.json");
 
 export interface OtpSession {
   code: string;
@@ -25,7 +28,7 @@ export interface OtpSession {
 
 type Store = Record<string, OtpSession>; // clé = discordId
 
-const store = new JsonStore<Store>(FILE_PATH, () => ({}));
+const store = new JsonStore<Store>(SESSIONS_FILE, () => ({}));
 
 /** Supprime les entrées expirées du store (mute en place). */
 function purgeExpired(s: Store): void {

@@ -9,7 +9,7 @@ COPY deno.json package-lock.json* ./
 COPY . .
 
 # Cache les dépendances (build time, pas runtime)
-RUN deno cache main.ts
+RUN deno cache src/main.ts
 
 # Lance le bot avec les permissions nécessaires
-CMD ["deno", "run", "--allow-net", "--allow-env", "--allow-read", "--allow-write", "main.ts"]
+CMD ["deno", "run", "--allow-net", "--allow-env", "--allow-read", "--allow-write", "src/main.ts"]

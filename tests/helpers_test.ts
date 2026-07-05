@@ -1,7 +1,7 @@
 // deno-lint-ignore-file no-import-prefix
 import "./_env.ts";
 import { assert, assertEquals, assertMatch } from "jsr:@std/assert";
-import { generateOtp, sleep } from "../helpers.ts";
+import { generateOtp, sleep } from "../src/shared/utils.ts";
 
 Deno.test("generateOtp - retourne 6 chiffres en string", () => {
   for (let i = 0; i < 100; i++) {

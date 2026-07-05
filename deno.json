@@ -1,8 +1,12 @@
 {
+  "imports": {
+    "discord.js": "npm:discord.js@^14.26.4",
+    "npm:discord.js@14": "npm:discord.js@14"
+  },
   "tasks": {
-    "dev": "deno run -A --env --watch main.ts",
-    "start": "deno run -A --env main.ts",
-    "check": "deno check main.ts",
+    "dev": "deno run -A --env --watch src/main.ts",
+    "start": "deno run -A --env src/main.ts",
+    "check": "deno check src/main.ts",
     "test": "deno test -A tests/"
   },
   "compilerOptions": {

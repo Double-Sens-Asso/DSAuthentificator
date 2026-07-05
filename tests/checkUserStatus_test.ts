@@ -1,7 +1,7 @@
 // deno-lint-ignore-file no-import-prefix
 import "./_env.ts";
 import { assert, assertEquals } from "jsr:@std/assert";
-import { checkUserStatus } from "../nocodb.ts";
+import { checkUserStatus } from "../src/services/verification.ts";
 
 interface RawRecord {
   id: number;

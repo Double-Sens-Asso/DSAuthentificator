@@ -1,7 +1,7 @@
 // deno-lint-ignore-file no-import-prefix
 import "./_env.ts";
 import { assert, assertEquals } from "jsr:@std/assert";
-import { checkRateLimit } from "../rateLimit.ts";
+import { checkRateLimit } from "../src/services/rate-limit.ts";
 
 // Chaque test utilise une clé unique pour ne pas polluer le bucket des autres.
 const k = (suffix: string) => `test-${suffix}-${crypto.randomUUID()}`;

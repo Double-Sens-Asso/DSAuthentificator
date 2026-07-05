@@ -1,50 +1,14 @@
 // deno-lint-ignore-file no-explicit-any
-import { CONFIG } from "./config.ts";
-import { debug } from "./helpers.ts";
-import { NocoMember, VerificationResult } from "./types.ts";
-
-// -------------------------------------------------------------------------
-// 1. FONCTIONS UTILITAIRES INTERNES (HELPERS)
-// -------------------------------------------------------------------------
-
 /**
- * Wrapper générique pour fetch vers l'API NocoDB.
- * Gère l'authentification via token et la gestion des erreurs (HTML vs JSON).
+ * Repository NocoDB : accès (lecture / écriture) aux dossiers adhérents.
+ * Traduit les enregistrements bruts NocoDB en `NocoMember` typés et isole
+ * le reste de l'application des détails de l'API v3.
  */
-async function nocoFetch<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const url = `${CONFIG.NOCODB_BASE_URL}${path}`;
-  debug(`NocoDB ${options.method ?? "GET"} ${url}`);
+import { CONFIG } from "../../config/config.ts";
+import { NocoMember } from "../../core/types.ts";
+import { nocoFetch } from "./client.ts";
 
-  const res = await fetch(url, {
-    ...options,
-    headers: {
-      "xc-token": CONFIG.NOCODB_TOKEN,
-      "Content-Type": "application/json",
-      ...options.headers,
-    },
-  });
-
-  // On récupère le texte brut d'abord pour éviter le crash "Unexpected token <"
-  const text = await res.text();
-
-  if (!res.ok) {
-    console.error(`❌ Erreur HTTP ${res.status}`);
-    console.error(`📄 Réponse serveur : ${text.slice(0, 300)}...`);
-    throw new Error(`Erreur NocoDB [${res.status}]`);
-  }
-
-  try {
-    return JSON.parse(text) as T;
-  } catch (_e) {
-    console.error("❌ Erreur JSON. Le serveur a renvoyé du HTML ou du texte brut :");
-    console.error(text.slice(0, 500));
-    throw new Error("Réponse invalide (Pas de JSON)");
-  }
-}
-
-/**
- * Normalise les données brutes de NocoDB en un objet typé propre.
- */
+/** Normalise les données brutes de NocoDB en un objet typé propre. */
 export function cleanRecord(raw: any): NocoMember | null {
   // Gestion des variations d'ID (id, Id, _id)
   const id = raw.id ?? raw.Id ?? raw._id;
@@ -72,12 +36,10 @@ export function cleanRecord(raw: any): NocoMember | null {
 }
 
 // -------------------------------------------------------------------------
-// 2. FONCTIONS PUBLIQUES : LECTURE (READ)
+// LECTURE (READ)
 // -------------------------------------------------------------------------
 
-/**
- * Teste la connectivité en demandant 1 ligne.
- */
+/** Teste la connectivité en demandant 1 ligne. */
 export async function testConnection(): Promise<boolean> {
   try {
     await nocoFetch(`/api/v3/data/${CONFIG.NOCODB_PROJECT_ID}/${CONFIG.NOCODB_TABLE_ID}/records?limit=1`);
@@ -88,9 +50,7 @@ export async function testConnection(): Promise<boolean> {
   }
 }
 
-/**
- * Cherche un adhérent selon une colonne spécifique (ex: Email ou DiscordID).
- */
+/** Cherche un adhérent selon une colonne spécifique (ex: Email ou DiscordID). */
 export async function findMemberByColumn(colName: string, value: string): Promise<NocoMember | null> {
   // Filtre NocoDB : where=(Colonne,eq,Valeur)
   const where = `where=(${encodeURIComponent(colName)},eq,${encodeURIComponent(value)})`;
@@ -136,49 +96,10 @@ export async function getAllLinkedUsers(): Promise<NocoMember[]> {
 }
 
 // -------------------------------------------------------------------------
-// 3. LOGIQUE MÉTIER : VÉRIFICATION
+// ÉCRITURE (WRITE)
 // -------------------------------------------------------------------------
 
-export async function checkUserStatus(emailInput: string, discordIdInput: string): Promise<VerificationResult> {
-  const email = emailInput.trim().toLowerCase();
-
-  // 1. Check : Ce compte Discord est-il déjà utilisé ?
-  const existingDiscord = await findMemberByColumn(CONFIG.COL_DISCORD_ID, discordIdInput);
-  if (existingDiscord && existingDiscord.email !== email) {
-    return { valid: false, message: "⛔ Ce compte Discord est déjà lié à un autre dossier." };
-  }
-
-  // 2. Check : L'email existe-t-il ?
-  const member = await findMemberByColumn(CONFIG.COL_EMAIL, email);
-  if (!member) {
-    return { valid: false, message: `❌ Email \`${email}\` introuvable.` };
-  }
-
-  // 3. Check : Cotisation à jour ?
-  if (!member.cotisationValide) {
-    return { valid: false, message: "⚠️ Ton dossier existe, mais ta cotisation n'est pas à jour." };
-  }
-
-  // 4. Check : Email déjà pris par un autre Discord ?
-  if (member.discordId && member.discordId !== discordIdInput) {
-    return { valid: false, message: "⛔ Cet email est déjà lié à un autre compte Discord." };
-  }
-
-  // 5. Check : Déjà fait ?
-  if (member.discordId === discordIdInput) {
-    return { valid: false, message: "✅ Ton compte est déjà correctement lié." };
-  }
-
-  return { valid: true, message: "OK", member };
-}
-
-// -------------------------------------------------------------------------
-// 4. FONCTIONS PUBLIQUES : ÉCRITURE (WRITE)
-// -------------------------------------------------------------------------
-
-/**
- * Lie l'ID Discord dans la base (PATCH).
- */
+/** Lie l'ID Discord dans la base (PATCH). */
 export async function linkDiscordUser(recordId: number, discordId: string): Promise<boolean> {
   try {
     const payload = [{ id: recordId, fields: { [CONFIG.COL_DISCORD_ID]: discordId } }];
@@ -194,9 +115,7 @@ export async function linkDiscordUser(recordId: number, discordId: string): Prom
   }
 }
 
-/**
- * Admin : Supprime la liaison.
- */
+/** Admin : Supprime la liaison Discord d'un dossier. */
 export async function unlinkUserByEmail(email: string): Promise<{ success: boolean; message: string }> {
   const member = await findMemberByColumn(CONFIG.COL_EMAIL, email.toLowerCase());
 

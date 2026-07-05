@@ -1,3 +1,7 @@
+// deno-lint-ignore-file no-import-prefix no-unversioned-import
+import { ensureDir } from "jsr:@std/fs";
+import { dirname } from "jsr:@std/path";
+
 /**
  * Conteneur JSON sur disque, écriture atomique (tmp+rename) et opérations sérialisées.
  */
@@ -18,6 +22,7 @@ export class JsonStore<T extends object> {
   }
 
   private async _save(data: T): Promise<void> {
+    await ensureDir(dirname(this.path));
     const tmp = `${this.path}.tmp`;
     await Deno.writeTextFile(tmp, JSON.stringify(data, null, 2));
     await Deno.rename(tmp, this.path);

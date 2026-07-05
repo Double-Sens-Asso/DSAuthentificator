@@ -1,7 +1,10 @@
-import { CONFIG } from "./config.ts";
+import { CONFIG } from "../config/config.ts";
 
 /** Pause asynchrone (anti-spam API). */
 export const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/** Normalise une adresse e-mail (trim + minuscules) pour des comparaisons strictes. */
+export const normalizeEmail = (e: string) => e.trim().toLowerCase();
 
 /** Log conditionnel (activé via DEBUG=true dans le .env). */
 export function debug(...args: unknown[]) {

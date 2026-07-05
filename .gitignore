@@ -21,5 +21,6 @@ lerna-debug.log*
 coverage/
 
 # Données runtime
+data/
 pending_removals.json
 otp_sessions.json

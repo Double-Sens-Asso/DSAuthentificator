@@ -1,15 +1,20 @@
 // deno-lint-ignore-file no-import-prefix
+/**
+ * Point d'entrée (composition root) : instancie le client, branche les
+ * écouteurs d'événements, enregistre les commandes et démarre le cron.
+ * Toute la logique vit dans les modules de `src/` ; ce fichier ne fait que
+ * les assembler.
+ */
+import { Events, REST, Routes } from "npm:discord.js@14";
+import { CONFIG } from "./config/config.ts";
+import { createClient } from "./discord/client.ts";
+import { handleInteraction } from "./discord/router.ts";
+import { commandsJson } from "./discord/commands/index.ts";
+import { handleMemberJoin } from "./services/membership.ts";
+import { runDailyCheck } from "./jobs/cotisation-check.ts";
+import { testConnection } from "./infrastructure/nocodb/members.repo.ts";
 
-import { Client, Events, GatewayIntentBits, REST, Routes } from "npm:discord.js@14";
-import { CONFIG } from "./config.ts";
-import { handleMemberJoin, runDailyCheck } from "./utils.ts";
-import { handleInteraction } from "./interactionHandler.ts";
-import { testConnection } from "./nocodb.ts";
-import { commands } from "./commands.ts";
-
-const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
-});
+const client = createClient();
 
 let stopping = false;
 
@@ -59,19 +64,19 @@ for (const sig of ["SIGINT", "SIGTERM"] as const) {
 client.once(Events.ClientReady, async () => {
   console.log(`🤖 Connecté: ${client.user?.tag}`);
 
-  // Commandes
+  // Enregistrement des commandes (scope guilde)
   const rest = new REST({ version: "10" }).setToken(CONFIG.TOKEN!);
   try {
-    await rest.put(Routes.applicationGuildCommands(client.user!.id, CONFIG.GUILD_ID!), { body: commands });
+    await rest.put(Routes.applicationGuildCommands(client.user!.id, CONFIG.GUILD_ID!), { body: commandsJson });
     console.log("✅ Commandes chargées.");
   } catch (e) {
     console.error(e);
   }
 
-  // DB Check
+  // Test de connexion à la base
   console.log((await testConnection()) ? "✅ NocoDB OK" : "❌ NocoDB Erreur");
 
-  // Cron
+  // Démarrage du cron
   scheduleCheck();
 });
 
