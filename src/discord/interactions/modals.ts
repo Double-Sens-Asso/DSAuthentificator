@@ -124,4 +124,27 @@ export const modalHandlers: Record<string, ModalHandler> = {
     await interaction.editReply(`🎉 **Félicitations !** Ton compte est maintenant lié à \`${session.email}\`.`);
     await deleteSession(interaction.user.id);
   },
+
+  [CustomId.MODAL_AVIS]: async (interaction) => {
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+    const noteRaw = interaction.fields.getTextInputValue(CustomId.INPUT_AVIS_NOTE).trim();
+    const comment = interaction.fields.getTextInputValue(CustomId.INPUT_AVIS_COMMENT).trim();
+
+    const note = Number(noteRaw);
+    if (!Number.isInteger(note) || note < 0 || note > 5) {
+      await interaction.editReply("❌ La note doit être un entier entre 0 et 5.");
+      return;
+    }
+
+    await sendLog(
+      interaction.guild!,
+      interaction.user.id,
+      interaction.user.tag,
+      `⭐ Avis (${note}/5) : ${comment.slice(0, 1000)}`,
+      Colors.BRAND,
+    );
+
+    await interaction.editReply("🙏 Merci ! Ton avis a bien été transmis à l'association.");
+  },
 };

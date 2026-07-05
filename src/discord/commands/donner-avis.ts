@@ -1,11 +1,17 @@
 // deno-lint-ignore-file no-import-prefix
-import { MessageFlags, SlashCommandBuilder } from "npm:discord.js@14";
+import {
+  LabelBuilder,
+  ModalBuilder,
+  SlashCommandBuilder,
+  TextInputBuilder,
+  TextInputStyle,
+} from "npm:discord.js@14";
+import { CustomId } from "../../config/constants.ts";
 import { SlashCommand } from "../registry.ts";
 
 /**
- * NOTE : dans l'ancienne architecture, cette commande était déclarée mais sans
- * handler — Discord affichait alors "L'application n'a pas répondu". On fournit
- * ici un retour minimal en attendant l'implémentation complète du recueil d'avis.
+ * Ouvre un modal de recueil d'avis (non anonyme). La soumission est traitée
+ * par le handler `MODAL_AVIS` (cf. interactions/modals.ts).
  */
 export const donnerAvis: SlashCommand = {
   data: new SlashCommandBuilder()
@@ -14,9 +20,31 @@ export const donnerAvis: SlashCommand = {
     .toJSON(),
 
   execute: async (interaction) => {
-    await interaction.reply({
-      content: "🚧 Cette fonctionnalité arrive bientôt. Merci de ta patience !",
-      flags: MessageFlags.Ephemeral,
-    });
+    const modal = new ModalBuilder()
+      .setCustomId(CustomId.MODAL_AVIS)
+      .setTitle("Donner un avis")
+      .setLabelComponents(
+        new LabelBuilder()
+          .setLabel("Note (0 à 5)")
+          .setTextInputComponent(
+            new TextInputBuilder()
+              .setCustomId(CustomId.INPUT_AVIS_NOTE)
+              .setPlaceholder("Exemple : 4")
+              .setStyle(TextInputStyle.Short)
+              .setRequired(true)
+              .setMaxLength(1),
+          ),
+        new LabelBuilder()
+          .setLabel("Commentaire (obligatoire)")
+          .setTextInputComponent(
+            new TextInputBuilder()
+              .setCustomId(CustomId.INPUT_AVIS_COMMENT)
+              .setPlaceholder("Exemple : L'entraide dans l'association est top !")
+              .setStyle(TextInputStyle.Paragraph)
+              .setRequired(true),
+          ),
+      );
+
+    await interaction.showModal(modal);
   },
 };

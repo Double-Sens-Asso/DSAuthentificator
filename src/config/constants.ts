@@ -31,4 +31,7 @@ export const CustomId = {
   MODAL_CODE: "modal_code",
   INPUT_EMAIL: "input_email",
   INPUT_CODE: "input_code",
+  MODAL_AVIS: "modal_avis",
+  INPUT_AVIS_NOTE: "input_avis_note",
+  INPUT_AVIS_COMMENT: "input_avis_comment",
 } as const;
